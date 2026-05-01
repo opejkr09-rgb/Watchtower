@@ -159,8 +159,4 @@ class Database:
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM submissions")
-            conn.commit()        return [dict(r) for r in rows]
-
-    def reset_all(self):
-        with self._conn() as conn:
-            conn.execute("DELETE FROM submissions")
+            conn.commit()
