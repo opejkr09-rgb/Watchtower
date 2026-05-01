@@ -18,14 +18,12 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
-def format_discord_link(link: str) -> bool:
-    """Basic validation that it looks like a Discord profile link."""
+def is_valid_discord_link(link: str) -> bool:
     link = link.strip().lower()
     return (
         "discord.com/users/" in link or
         "discordapp.com/users/" in link or
-        link.startswith("@") or  # Allow @username format too
-        link.startswith("discord.gg/") or
+        link.startswith("@") or
         "discord.gg/" in link
     )
 
@@ -36,8 +34,7 @@ def format_discord_link(link: str) -> bool:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    db.ensure_user(user.id, user.username or user.first_name)
-
+    await db.ensure_user(user.id, user.username or user.first_name)
     text = (
         f"👋 Hey {user.first_name}! Welcome to the Referral Contest Bot.\n\n"
         "📋 *How it works:*\n"
@@ -60,7 +57,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    db.ensure_user(user.id, user.username or user.first_name)
+    await db.ensure_user(user.id, user.username or user.first_name)
 
     if not context.args:
         await update.message.reply_text(
@@ -72,7 +69,7 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     link = " ".join(context.args).strip()
 
-    if not format_discord_link(link):
+    if not is_valid_discord_link(link):
         await update.message.reply_text(
             "❌ That doesn't look like a valid Discord profile link.\n\n"
             "Please use a link like:\n`https://discord.com/users/123456789`",
@@ -80,15 +77,14 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Check for duplicate submission (same link by any user)
-    if db.link_already_submitted(link):
+    if await db.link_already_submitted(link):
         await update.message.reply_text(
-            "⚠️ This Discord profile has already been submitted by someone. "
+            "⚠️ This Discord profile has already been submitted. "
             "Each referral can only be counted once."
         )
         return
 
-    submission_id = db.add_submission(user.id, link)
+    submission_id = await db.add_submission(user.id, link)
 
     await update.message.reply_text(
         f"✅ Referral submitted!\n\n"
@@ -99,7 +95,6 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-    # Notify admins
     for admin_id in ADMIN_IDS:
         try:
             await context.bot.send_message(
@@ -119,10 +114,10 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def mystats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    db.ensure_user(user.id, user.username or user.first_name)
+    await db.ensure_user(user.id, user.username or user.first_name)
 
-    stats = db.get_user_stats(user.id)
-    rank = db.get_user_rank(user.id)
+    stats = await db.get_user_stats(user.id)
+    rank = await db.get_user_rank(user.id)
 
     text = (
         f"📊 *Your Referral Stats*\n\n"
@@ -147,7 +142,7 @@ async def list_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 Admin only.")
         return
 
-    leaderboard = db.get_leaderboard()
+    leaderboard = await db.get_leaderboard()
 
     if not leaderboard:
         await update.message.reply_text("No approved referrals yet.")
@@ -169,7 +164,7 @@ async def pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 Admin only.")
         return
 
-    submissions = db.get_pending_submissions()
+    submissions = await db.get_pending_submissions()
 
     if not submissions:
         await update.message.reply_text("✅ No pending submissions!")
@@ -182,14 +177,11 @@ async def pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"   🔗 {s['link']}\n"
             f"   📅 {s['submitted_at']}\n"
         )
-
     lines.append("━━━━━━━━━━━━━━━━")
     lines.append("Use /approve `<id>` or /reject `<id>` `<reason>`")
 
-    # Split if too long
     full_text = "\n".join(lines)
     if len(full_text) > 4000:
-        # Send in chunks
         chunk = []
         for line in lines:
             chunk.append(line)
@@ -212,7 +204,7 @@ async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     sub_id = context.args[0].strip()
-    result = db.update_submission_status(sub_id, "approved")
+    result = await db.update_submission_status(sub_id, "approved")
 
     if not result:
         await update.message.reply_text(f"❌ Submission `{sub_id}` not found or already reviewed.", parse_mode="Markdown")
@@ -220,7 +212,6 @@ async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"✅ Submission `{sub_id}` approved!", parse_mode="Markdown")
 
-    # Notify user
     try:
         await context.bot.send_message(
             chat_id=result["user_id"],
@@ -243,16 +234,13 @@ async def reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text(
-            "Usage: `/reject <submission_id> [reason]`",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("Usage: `/reject <submission_id> [reason]`", parse_mode="Markdown")
         return
 
     sub_id = context.args[0].strip()
     reason = " ".join(context.args[1:]) if len(context.args) > 1 else "Does not meet requirements"
 
-    result = db.update_submission_status(sub_id, "rejected", reason)
+    result = await db.update_submission_status(sub_id, "rejected", reason)
 
     if not result:
         await update.message.reply_text(f"❌ Submission `{sub_id}` not found or already reviewed.", parse_mode="Markdown")
@@ -260,7 +248,6 @@ async def reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"🗑️ Submission `{sub_id}` rejected.", parse_mode="Markdown")
 
-    # Notify user
     try:
         await context.bot.send_message(
             chat_id=result["user_id"],
@@ -290,35 +277,39 @@ async def reset_contest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    db.reset_all()
+    await db.reset_all()
     await update.message.reply_text("🔄 Contest has been reset. All submissions cleared.")
 
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "❓ Unknown command. Use /help to see available commands."
-    )
+    await update.message.reply_text("❓ Unknown command. Use /help to see available commands.")
+
+
+async def post_init(application: Application):
+    await db.init()
+    logger.info("Database initialized.")
 
 
 def main():
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN not set in environment variables")
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
 
-    # User commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("submit", submit))
     app.add_handler(CommandHandler("mystats", mystats))
-
-    # Admin commands
     app.add_handler(CommandHandler("list", list_referrals))
     app.add_handler(CommandHandler("pending", pending))
     app.add_handler(CommandHandler("approve", approve))
     app.add_handler(CommandHandler("reject", reject))
     app.add_handler(CommandHandler("reset", reset_contest))
-
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
     logger.info("Bot is running...")
